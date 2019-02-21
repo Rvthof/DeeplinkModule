@@ -6,6 +6,7 @@ import java.io.StringWriter;
 import java.io.Writer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.GregorianCalendar;
@@ -16,6 +17,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.apache.commons.lang3.StringEscapeUtils;
+
 import com.mendix.core.Core;
 import com.mendix.core.CoreException;
 import com.mendix.m2ee.api.IMxRuntimeRequest;
@@ -24,10 +27,9 @@ import com.mendix.systemwideinterfaces.core.IContext;
 import com.mendix.systemwideinterfaces.core.IMendixObject;
 import com.mendix.systemwideinterfaces.core.IMendixObjectMember;
 
-import deeplink.proxies.BotStrings;
 import deeplink.proxies.DeepLink;
 import deeplink.proxies.SeoEntityMetadata;
-import deeplink.proxies.SitemapDeeplinks;
+import deeplink.proxies.SitemapDeeplink;
 import freemarker.core.ParseException;
 import freemarker.template.Configuration;
 import freemarker.template.MalformedTemplateNameException;
@@ -61,17 +63,17 @@ public class DeeplinkSEO {
 	}
 
 	public static Boolean isBotRequest(IContext context, String userAgentName) throws CoreException {
-		List<BotStrings> botList = BotStrings.load(context, "");
+		List<String> botList = Arrays.asList("baidu", "bingbot", "bingpreview", "msnbot", "duckduckgo", "googlebot", "teoma",
+				"slurp", "yandex", "linkedinbot", "slackbot-linkexpanding", "Twitterbot", "bot");
 
-		for (BotStrings bot : botList) {
-			String regex = String.format(".*%s.*", bot.getBotSearchString());
+		String regex = String.join("|", botList);
+		regex = ".*"+regex+"*.";
+		
+		Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
+		Matcher matcher = pattern.matcher(userAgentName);
 
-			Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
-			Matcher matcher = pattern.matcher(userAgentName);
-
-			if (matcher.find()) {
-				return true;
-			}
+		if (matcher.find()) {
+			return true;
 		}
 
 		return false;
@@ -245,23 +247,23 @@ public class DeeplinkSEO {
 						String baseurl = Core.getConfiguration().getApplicationRootUrl();
 						baseurl = baseurl.endsWith("/") ? baseurl : baseurl+"/";
 						
-						urlList.add(baseurl + deeplink.proxies.constants.Constants.getRequestHandlerName() + "/" + link.getName()
-								+ "/" + valueStr);
+						urlList.add(StringEscapeUtils.escapeXml(baseurl + deeplink.proxies.constants.Constants.getRequestHandlerName() + "/" + link.getName()
+								+ "/" + valueStr));
 					}
 				}
 			} else if (link.getUseStringArgument()) {
-				List<SitemapDeeplinks> links = SitemapDeeplinks.load(ctx,
-						String.format("[%s = '%s']", SitemapDeeplinks.MemberNames.DeeplinkName,
+				List<SitemapDeeplink> links = SitemapDeeplink.load(ctx,
+						String.format("[%s = '%s']", SitemapDeeplink.MemberNames.DeeplinkName,
 								link.getName()));
 
 				links.stream().forEach(l -> {
-					urlList.add(l.getLinkToObject());
+					urlList.add(StringEscapeUtils.escapeXml(l.getLinkToObject()));
 				});
 			} else {
-				urlList.add(link.getArgumentExample());
+				urlList.add(StringEscapeUtils.escapeXml(link.getArgumentExample()));
 			}
 		}
-
+		
 		returnMap.put("links", urlList);
 
 		return returnMap;
