@@ -15,6 +15,7 @@ import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringEscapeUtils;
@@ -25,6 +26,7 @@ import com.mendix.logging.ILogNode;
 import com.mendix.m2ee.api.IMxRuntimeRequest;
 import com.mendix.m2ee.api.IMxRuntimeResponse;
 import com.mendix.systemwideinterfaces.core.IContext;
+import com.mendix.systemwideinterfaces.core.IDataType;
 import com.mendix.systemwideinterfaces.core.IMendixObject;
 import com.mendix.systemwideinterfaces.core.ISession;
 import com.mendix.webui.CustomJavaAction;
@@ -185,7 +187,7 @@ public class StartDeeplinkJava extends CustomJavaAction<Boolean>
 							return;
 						}
 						
-						IMendixObject theobject = getDeeplinkObject(args, request, response, Core.createSystemContext(), deeplink, null);
+						IMendixObject theobject = getDeeplinkObjectSEO(args, request, response, Core.createSystemContext(), deeplink, seoEntityMetadata);
 						
 						if (!deeplink.getUseStringArgument() && deeplink.getObjectType() != null
 								&& !deeplink.getObjectType().isEmpty()
@@ -261,14 +263,27 @@ public class StartDeeplinkJava extends CustomJavaAction<Boolean>
 
 			Core.delete(context, pendinglinks);
 
-			// find the object, we search the object before serving the deeplink, to avoid
-			// loading the client for
-			// incorrect links
-			IMendixObject theobj = getDeeplinkObject(args, request, response, context, deeplink, user);
-			if (theobj == null) {
-				return;
+			//find the object, we search the object before serving the deeplink, to avoid loading the client for
+			//incorrect links
+			Long theobject = 0L;
+			if (!deeplink.getUseStringArgument() && deeplink.getObjectType() != null && !deeplink.getObjectType().isEmpty()) {
+				String argument = args.length < 4 ? "" : (args[3] == null ? "" : args[3]); 
+				IMendixObject arg = null;
+
+				if (deeplink.getObjectAttribute() == null || deeplink.getObjectAttribute().isEmpty()) 
+					arg = Core.retrieveId(context, Core.createMendixIdentifier(argument));
+				else //use attr
+					arg = query(context, deeplink.getObjectType(), deeplink.getObjectAttribute(), argument); //argument is already escaped
+
+				if (arg == null) 
+				{
+					StartDeeplinkJava.logger.warn(String.format("While serving deeplink '%s', the object %s.%s for value '%s' was not found", deeplink.getName(), deeplink.getObjectType(), deeplink.getObjectAttribute(), argument));
+					serve404(request, response, user);
+					return;
+				}
+
+				theobject = arg.getId().toLong();
 			}
-			Long theobject = theobj.getId().toLong();
 			
 
 			// then create a new pendinglink
@@ -281,14 +296,7 @@ public class StartDeeplinkJava extends CustomJavaAction<Boolean>
 			// take the remainder of the path, if getusestringargument is true. Escape that?
 			// -> No, responsibility of the microflow
 			if (deeplink.getUseStringArgument()) {
-				String path = request.getResourcePath();
-
-				// calculate cutoff point to get to String parameter
-				int pos = path.indexOf("/" + deeplink.getName()) + deeplink.getName().length() + 2;
-				if (pos < path.length() && pos != -1)
-					path = path.substring(pos);
-				else
-					path = "";
+				String path = getStringArgumentPath(request, deeplink);
 
 				// set String argument
 				link.setStringArgument(path);
@@ -321,10 +329,51 @@ public class StartDeeplinkJava extends CustomJavaAction<Boolean>
 			response.addHeader("location", getRelPath(request) + location);
 		}
 
-		private IMendixObject getDeeplinkObject(String[] args, IMxRuntimeRequest request, IMxRuntimeResponse response,
-				IContext context, DeepLink deeplink, String user) throws CoreException, IOException {
+		private String getStringArgumentPath(IMxRuntimeRequest request, DeepLink deeplink) {
+			String path = request.getResourcePath();
+
+			// calculate cutoff point to get to String parameter
+			int pos = path.indexOf("/" + deeplink.getName()) + deeplink.getName().length() + 2;
+			if (pos < path.length() && pos != -1)
+				path = path.substring(pos);
+			else
+				path = "";
+			
+			if (deeplink.getIncludeGetParameters()) {
+				String qs = request.getHttpServletRequest().getQueryString();
+				if (qs != null && !qs.isEmpty()) {
+					path = path + "?" + qs;
+				}
+			}
+			
+			return path;
+		}
+
+		private IMendixObject getDeeplinkObjectSEO(String[] args, IMxRuntimeRequest request, IMxRuntimeResponse response,
+				IContext context, DeepLink deeplink, SeoEntityMetadata seoEntityMetadata) throws CoreException, IOException {
 			IMendixObject arg = null;
-			if (!deeplink.getUseStringArgument() && deeplink.getObjectType() != null
+			
+			if (deeplink.getUseStringArgument()) {
+				String mf = seoEntityMetadata.getStringArgRetrieveMicroflow();
+				
+				String path = getStringArgumentPath(request, deeplink);
+				
+				Map<String, IDataType> inputs = Core.getInputParameters(mf);
+				if (inputs.size() > 0) {
+					String inputKey = null;
+					for (String key : inputs.keySet()) {
+						inputKey = key;
+						break;
+					}
+					Map<String, Object> map = new HashMap<String, Object>();
+					map.put(inputKey, path);
+					IMendixObject obj = Core.execute(context, mf, map);
+					return obj;
+				} else {
+					IMendixObject obj = Core.execute(context, mf);
+					return obj;
+				}
+			} else if (!deeplink.getUseStringArgument() && deeplink.getObjectType() != null
 					&& !deeplink.getObjectType().isEmpty()) {
 				String argument = args.length < 4 ? "" : (args[3] == null ? "" : args[3]);
 
@@ -337,7 +386,7 @@ public class StartDeeplinkJava extends CustomJavaAction<Boolean>
 					StartDeeplinkJava.logger.warn(String.format(
 							"While serving deeplink '%s', the object %s.%s for value '%s' was not found",
 							deeplink.getName(), deeplink.getObjectType(), deeplink.getObjectAttribute(), argument));
-					serve404(request, response, user);
+					serve404(request, response, null);
 					return null;
 				}
 			}
